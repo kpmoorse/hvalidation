@@ -31,33 +31,33 @@ def linear(th, thd, params):
     g,l,b = params
     return -g*l*th - b*thd
 
-def pperf(state1, state2):
+def pperf(state1, state2, thresh):
 
     # Calculate "periodic distance" between position vectors
     F1 = np.abs(np.fft.fft(state1[:,0]))
     F2 = np.abs(np.fft.fft(state2[:,0]))
     pnorm = np.linalg.norm(F1-F2)
     
-    return -pnorm
+    return thresh-pnorm
 
-def compare(initial_state, t, model1, model2, metric):
+def compare(initial_state, t, model1, model2, metric, thresh=0):
 
     state1 = sim_pendulum(initial_state, t, model1)
     state2 = sim_pendulum(initial_state, t, model2)
 
-    return metric(state1, state2)
+    return metric(state1, state2, thresh)
 
-t = np.arange(0,10,0.001)
-th0_list = np.arange(-np.pi/4, np.pi/4, 0.1).reshape(-1,1)
-is_list = np.hstack((th0_list, np.zeros_like(th0_list)))
+if __name__ == '__main__':
 
-g = []
-for i in is_list:
-    g.append(compare(i, t, nonlinear, linear, pperf))
-g = np.array(g)
+    t = np.arange(0,10,0.001)
+    th0_list = np.arange(-np.pi/4, np.pi/4, 0.1).reshape(-1,1)
+    init_list = np.hstack((th0_list, np.zeros_like(th0_list)))
 
-# plt.plot(np.abs(np.fft.fft(state_nl[:,0])))
-# plt.plot(np.abs(np.fft.fft(state_l[:,0])))
-plt.plot(is_list[:,0], g)
-plt.show()
+    g = []
+    for i in init_list:
+        g.append(compare(i, t, nonlinear, linear, pperf, thresh=50))
+    g = np.array(g)
+
+    plt.plot(init_list[:,0], g)
+    plt.show()
 
