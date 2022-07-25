@@ -52,6 +52,7 @@ class HVal:
         plt.plot(x, mean-stdev, 'b--', x, mean+stdev, 'b--')
         plt.hlines(0,np.min(x),np.max(x),'k','--')
 
+
     def get_gradient(self,x,dx=1e-5):
 
         grad = []
@@ -65,23 +66,63 @@ class HVal:
 
         return np.array(grad)
 
-    def get_hessian(self,x,dx=1e-5):
+
+    def get_hessian(self,x,h=1e-5):
+
+        y0 = self.query(x,info='mean')
 
         hess = []
         for n in range(self.dimX):
+
+            f = lambda x: self.query(x,info='mean')[0][0]
+
             hess.append([])
             ind_n = np.arange(self.dimX)==n
-            for m in range(self.dimX):
-                ind_m = np.arange(self.dimX)==m
-                
 
+            for m in range(self.dimX):
+
+                ind_m = np.arange(self.dimX)==m
+
+                # Calculate finite difference
+                if m==n:
+                    ind = ind_n # = ind_m
+                    fdiff = f(x+ind*h) - 2*f(x) + f(x-ind*h)
+                    fdiff /= h**2
+                else:
+                    fdiff = f(x+ind_n*h+ind_m*h) - f(x+ind_n*h-ind_m*h) - f(x-ind_n*h+ind_m*h) + f(x-ind_n*h-ind_m*h)
+                    fdiff /= 4*h**2
+
+                hess[-1].append(fdiff)
+        return np.array(hess)
+            
 
     # Very approximate, needs work
     def get_nearest_zero(self, x, alpha=0.001):
 
         #via Newton's method
         x0 = x
+        # print(x)
+        iter = 0
         while True:
+
+            # Approximate Hessian and gradient via finite difference
+            hess = self.get_hessian(x)
+            # print(hess)
+            grad = self.get_gradient(x).reshape(-1,1)
+            # print(grad)
+            # print('********************')
+            inv_hess = np.linalg.pinv(hess)
+            x -= inv_hess.dot(grad)
+
+            y = self.query(x,info='mean')
+            print(x)
+            if np.abs(y) < alpha:
+                return x
+            elif iter > 20:
+                print("Maximum iterations reached")
+                return x
+            else:
+                iter += 1
 
         # while True:
         #     grad = self.get_gradient(x)
@@ -107,8 +148,7 @@ class HVal:
     def get_perr(self, x):
 
         nz = self.get_nearest_zero(x)
-        mean, stdev = self.query(x)
-
+        mean, stdev = self.query(x,info='both')
 
         perr = 1-sps.norm.cdf(np.abs(mean/stdev))
         if nz:
