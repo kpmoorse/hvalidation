@@ -17,7 +17,7 @@ class HVal(object):
 
     def fit(self):
 
-        self.gpa.fit(X,y)
+        self.gpa.fit(self.X,self.y)
         self.dimX = self.X.shape[1]
 
     def query(self, x, info="both"):
@@ -41,18 +41,6 @@ class HVal(object):
 
         if fit:
             self.fit()
-
-    # Plot mean and stdev of current GPA
-    def plot2D(self, x):
-
-        X = x.reshape(-1,1)
-
-        mean, stdev = self.gpa.predict(X, return_std=True)
-        stdev = stdev.reshape(-1,1)
-        
-        plt.plot(x, mean, 'b-')
-        plt.plot(x, mean-stdev, 'b--', x, mean+stdev, 'b--')
-        plt.hlines(0,np.min(x),np.max(x),'k','--')
 
 
     def get_gradient(self,x,h=1e-5,rect=False):
@@ -122,35 +110,8 @@ class HVal(object):
             root = None
         return root
 
-        #via Newton's method
-        x = x.reshape(-1,1)
-        x0 = x.copy()
-        dist = 0
-        iter = 0
-        while iter < max_iter and dist < 5:
 
-            # Approximate Hessian and gradient via finite difference
-            hess = self.get_hessian(x,rect=True)
-            grad = self.get_gradient(x,rect=True)
-            inv_hess = np.linalg.pinv(hess)
-            
-            # print(x,alpha*inv_hess.dot(grad))
-            x -= alpha*inv_hess.dot(grad)
-
-            y = self.query(x,info='mean')
-            dist = np.linalg.norm(x-x0)
-            print(dist)
-            # print(dist)
-            if np.abs(y) < term:
-                return x
-            else:
-                iter += 1
-        
-        # print("Maximum iterations reached")
-        return None
-
-
-    def get_perr(self, x):
+    def get_perr(self, x, max_exc=0.5, exc=True):
 
         nz = self.get_nearest_zero(x)
         # nz = self.get_nearest_zero(x)
@@ -160,7 +121,7 @@ class HVal(object):
 
         perr = 1-sps.norm.cdf(np.abs(mean/stdev))
         # nz = None
-        if nz:
+        if nz and exc:
             # print("yes")
             zero_std_y = self.query(nz, info="stdev")
             # print(zero_std_y)
@@ -170,6 +131,7 @@ class HVal(object):
                 return 0
             else:
                 zero_std_x = zero_std_y/np.linalg.norm(zero_grad)
+                zero_std_x = min(zero_std_x,max_exc)
                 nz_dist = np.linalg.norm(nz-x)
                 perr *= 1-np.exp(-nz_dist**2/(2*zero_std_x**2))
 
@@ -181,24 +143,24 @@ class HVal(object):
             return -1*hv.get_perr(x)
         bounds = np.array([[-1.5,1.5]])
         optim = spo.differential_evolution(obj, bounds)
-        
+
         return optim.x
 
-    #     obj = lambda x: -1*np.log(self.get_perr(x))
+    # Plot mean and stdev of current GPA
+    def plot2D(self, x):
 
-    #     # bounds = spo.Bounds([-1],[1])
-    #     # optim = spo.dual_annealing(obj, [[-1,1]])
-    #     bounds = np.array([[-1,1]])
-    #     # optim = spo.dual_annealing(obj, bounds)
-    #     optim = spo.brute(obj, bounds, full_output=True)
-    #     print(optim[0], optim[1])
-    #     return optim[0]
+        X = x.reshape(-1,1)
+        mean, stdev = self.query(X, info='both')
+        
+        plt.plot(x, mean, 'b-')
+        plt.plot(x, mean-stdev, 'b--', x, mean+stdev, 'b--')
+        plt.hlines(0,np.min(x),np.max(x),'k','--')
 
 
 if __name__ == '__main__':
 
     # Generate test data
-    N = 8
+    N = 5
     xrange = (-1.5,1.5)
     noise = 0.01
 
@@ -212,38 +174,30 @@ if __name__ == '__main__':
 
     hv = HVal(alpha=noise)
     hv.add_data(X,y)
+
+    # print(hv.X)
+    # print(hv.X[:-1,:])  
+    # print(hv.X[-1:,:])  
+    # print(hv.y)
+    # print(hv.y[:-1,:])
+    # print(hv.y[-1:,:])
+
+    for i in range(10):
+
+        print(hv.X)
+        print(hv.y)
+
+        xstar = hv.get_max_perr()
+        ystar = f_true(xstar)+np.random.normal(0,noise)
+        hv.add_data(xstar, ystar)
     
-    # print(hv.get_nearest_zero(np.array([0.5])))
+        plt.subplot(211)
+        hv.plot2D(x_full)
+        plt.scatter(hv.X[:-1,:],hv.y[:-1,:],color='b')
+        plt.scatter(hv.X[-1:,:],hv.y[-1:,:],color='r')
 
-    mean = []
-    stdev = []
-    for x in x_full:
-        m,s = hv.query(x,info='both')
-        mean.append(m)
-        stdev.append(s)
-    mean = np.array(mean)
+        plt.subplot(212)
+        plt.plot(x_full, [hv.get_perr(x,exc=False) for x in x_full])
+        plt.plot(x_full, [hv.get_perr(x) for x in x_full])
 
-    # perr = lambda x: hv.get_perr(x)
-    # perr = []
-    # for i in tqdm(x_full):
-    #     # perr.append(hv.get_perr(i))
-    #     perr.append(-1*hv.get_perr(i))
-    # perr = np.array(perr)
-    # # print(perr)
-    
-    
-    # print(argmax)
-
-    plt.subplot(211)
-    # hv.plot2D(x_full)
-    plt.plot(x_full, f_true(x_full), 'r-')
-    plt.plot(x_full, mean, 'b-')
-    plt.plot(x_full, mean-stdev, 'b--', x_full, mean+stdev, 'b--')
-    plt.hlines(0,xrange[0],xrange[1],'k','--')
-
-    plt.subplot(212)
-    plt.plot(x_full, [-1*hv.get_perr(x) for x in x_full])
-
-    hv.get_max_perr()
-
-    plt.show()
+        plt.show()
