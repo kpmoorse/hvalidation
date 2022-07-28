@@ -1,10 +1,12 @@
+from sysconfig import get_preferred_scheme
 import numpy as np
 import matplotlib.pyplot as plt
 import sklearn.gaussian_process as skg
 import scipy.stats as sps
+import scipy.optimize as spo
 from tqdm import tqdm
 
-class HVal:
+class HVal(object):
 
     def __init__(self, alpha=1e-10):
 
@@ -23,7 +25,7 @@ class HVal:
         if info=="mean":
             return self.gpa.predict(x.reshape(-1,1))
         elif info=="stdev":
-            return self.gpa.predict(x.reshape(-1,1), return_std=True)[0]
+            return self.gpa.predict(x.reshape(-1,1), return_std=True)[1]
         elif info=="both":
             return self.gpa.predict(x.reshape(-1,1), return_std=True)
 
@@ -53,28 +55,39 @@ class HVal:
         plt.hlines(0,np.min(x),np.max(x),'k','--')
 
 
-    def get_gradient(self,x,dx=1e-5):
+    def get_gradient(self,x,h=1e-5,rect=False):
 
         grad = []
         x0 = x.reshape(-1,1)
-        y0 = self.gpa.predict(x0)[0][0]
+
+        if rect:
+            f = lambda x: self.query(x,info='mean')**2
+        else:
+            f = lambda x: self.query(x,info='mean')
+
+
         for n in range(self.dimX):
             ind = np.arange(self.dimX)==n
-            xstep = (x+dx*ind).reshape(-1,1)
-            dfdxn = (self.gpa.predict(xstep)[0][0] - y0)/dx
+            xp = (x+h*ind).reshape(-1,1)
+            xm = (x-h*ind).reshape(-1,1)
+            dfdxn = (f(xp) - f(xm))/(2*h)
             grad.append(dfdxn)
 
-        return np.array(grad)
+        return np.array(grad).reshape(-1,1)
 
 
-    def get_hessian(self,x,h=1e-5):
+    def get_hessian(self,x,h=1e-5,rect=False):
 
+        x = x.reshape(-1,1)
         y0 = self.query(x,info='mean')
 
         hess = []
         for n in range(self.dimX):
 
-            f = lambda x: self.query(x,info='mean')[0][0]
+            if rect:
+                f = lambda x: self.query(x,info='mean')**2
+            else:
+                f = lambda x: self.query(x,info='mean')
 
             hess.append([])
             ind_n = np.arange(self.dimX)==n
@@ -92,83 +105,101 @@ class HVal:
                     fdiff = f(x+ind_n*h+ind_m*h) - f(x+ind_n*h-ind_m*h) - f(x-ind_n*h+ind_m*h) + f(x-ind_n*h-ind_m*h)
                     fdiff /= 4*h**2
 
-                hess[-1].append(fdiff)
+                hess[-1].append(fdiff.flatten()[0])
+
         return np.array(hess)
             
 
-    # Very approximate, needs work
-    def get_nearest_zero(self, x, alpha=0.001):
+    # Hybrid Powell Method
+    def get_nearest_zero(self, x, alpha=0.5, term=1e-5, max_iter=20):
+
+        def f(x):
+            return hv.query(x,info='mean')
+        optim = spo.root(f,x,method='hybr')
+        if optim.success:
+            root = optim.x
+        else:
+            root = None
+        return root
 
         #via Newton's method
-        x0 = x
-        # print(x)
+        x = x.reshape(-1,1)
+        x0 = x.copy()
+        dist = 0
         iter = 0
-        while True:
+        while iter < max_iter and dist < 5:
 
             # Approximate Hessian and gradient via finite difference
-            hess = self.get_hessian(x)
-            # print(hess)
-            grad = self.get_gradient(x).reshape(-1,1)
-            # print(grad)
-            # print('********************')
+            hess = self.get_hessian(x,rect=True)
+            grad = self.get_gradient(x,rect=True)
             inv_hess = np.linalg.pinv(hess)
-            x -= inv_hess.dot(grad)
+            
+            # print(x,alpha*inv_hess.dot(grad))
+            x -= alpha*inv_hess.dot(grad)
 
             y = self.query(x,info='mean')
-            print(x)
-            if np.abs(y) < alpha:
-                return x
-            elif iter > 20:
-                print("Maximum iterations reached")
+            dist = np.linalg.norm(x-x0)
+            print(dist)
+            # print(dist)
+            if np.abs(y) < term:
                 return x
             else:
                 iter += 1
+        
+        # print("Maximum iterations reached")
+        return None
 
-        # while True:
-        #     grad = self.get_gradient(x)
-
-        #     y = self.gpa.predict(x.reshape(-1,1))
-
-        #     xstep = x - np.sign(y)*grad*alpha
-
-        #     ystep, std_y = self.gpa.predict(xstep.reshape(-1,1), return_std=True)
-        #     y, ystep = y.flatten(), ystep.flatten()
-
-        #     std_x = std_y/np.linalg.norm(grad)
-        #     net_dist = np.linalg.norm(x0-xstep)
-        #     # print(net_dist, std_x*3)
-        #     if ystep*y < 0:
-        #         return (xstep+x)/2
-        #     elif net_dist > std_x*3:
-        #         return None
-        #     else:
-        #         x = xstep
-        # pass
 
     def get_perr(self, x):
 
         nz = self.get_nearest_zero(x)
+        # nz = self.get_nearest_zero(x)
+        # nz = None
+        # print(nz)
         mean, stdev = self.query(x,info='both')
 
         perr = 1-sps.norm.cdf(np.abs(mean/stdev))
+        # nz = None
         if nz:
             # print("yes")
             zero_std_y = self.query(nz, info="stdev")
+            # print(zero_std_y)
             zero_grad = self.get_gradient(nz)
-            zero_std_x = zero_std_y/np.linalg.norm(zero_grad)
+            if np.linalg.norm(zero_grad) == 0:
+                print('zero grad:', nz)
+                return 0
+            else:
+                zero_std_x = zero_std_y/np.linalg.norm(zero_grad)
+                nz_dist = np.linalg.norm(nz-x)
+                perr *= 1-np.exp(-nz_dist**2/(2*zero_std_x**2))
 
-            nz_dist = np.linalg.norm(nz-x)
-
-            perr *= 1-np.exp(-nz_dist**2/(2*zero_std_x**2))
-        else:
-            print("no")
         return perr[0]
+
+    def get_max_perr(self):
+
+        def obj(x):
+            return -1*hv.get_perr(x)
+        bounds = np.array([[-1.5,1.5]])
+        optim = spo.differential_evolution(obj, bounds)
+        
+        return optim.x
+
+    #     obj = lambda x: -1*np.log(self.get_perr(x))
+
+    #     # bounds = spo.Bounds([-1],[1])
+    #     # optim = spo.dual_annealing(obj, [[-1,1]])
+    #     bounds = np.array([[-1,1]])
+    #     # optim = spo.dual_annealing(obj, bounds)
+    #     optim = spo.brute(obj, bounds, full_output=True)
+    #     print(optim[0], optim[1])
+    #     return optim[0]
+
 
 if __name__ == '__main__':
 
     # Generate test data
-    N = 15
-    xrange = (-1,1)
+    N = 8
+    xrange = (-1.5,1.5)
     noise = 0.01
 
     x_full = np.arange(xrange[0],xrange[1],0.01)
@@ -176,7 +207,7 @@ if __name__ == '__main__':
     xx = np.random.uniform(xrange[0],xrange[1],N)
     X = xx.reshape(-1,1)
 
-    f_true = lambda x: -x**2+0.5
+    f_true = lambda x: 1-x**2
     y = f_true(X) + np.random.normal(0,noise,(N,1))
 
     hv = HVal(alpha=noise)
@@ -184,17 +215,35 @@ if __name__ == '__main__':
     
     # print(hv.get_nearest_zero(np.array([0.5])))
 
-    perr = []
-    for i in tqdm(x_full):
-        perr.append(hv.get_perr(i))
-    perr = np.array(perr)
-    # print(perr)
+    mean = []
+    stdev = []
+    for x in x_full:
+        m,s = hv.query(x,info='both')
+        mean.append(m)
+        stdev.append(s)
+    mean = np.array(mean)
+
+    # perr = lambda x: hv.get_perr(x)
+    # perr = []
+    # for i in tqdm(x_full):
+    #     # perr.append(hv.get_perr(i))
+    #     perr.append(-1*hv.get_perr(i))
+    # perr = np.array(perr)
+    # # print(perr)
     
+    
+    # print(argmax)
+
     plt.subplot(211)
-    hv.plot2D(x_full)
+    # hv.plot2D(x_full)
     plt.plot(x_full, f_true(x_full), 'r-')
+    plt.plot(x_full, mean, 'b-')
+    plt.plot(x_full, mean-stdev, 'b--', x_full, mean+stdev, 'b--')
+    plt.hlines(0,xrange[0],xrange[1],'k','--')
 
     plt.subplot(212)
-    plt.plot(x_full, perr)
+    plt.plot(x_full, [-1*hv.get_perr(x) for x in x_full])
+
+    hv.get_max_perr()
 
     plt.show()
