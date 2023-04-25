@@ -23,11 +23,11 @@ class HVal(object):
     def query(self, x, info="both"):
 
         if info=="mean":
-            return self.gpa.predict(x.reshape(-1,1))
+            return self.gpa.predict(x.reshape(-1,self.dimX))
         elif info=="stdev":
-            return self.gpa.predict(x.reshape(-1,1), return_std=True)[1]
+            return self.gpa.predict(x.reshape(-1,self.dimX), return_std=True)[1]
         elif info=="both":
-            return self.gpa.predict(x.reshape(-1,1), return_std=True)
+            return self.gpa.predict(x.reshape(-1,self.dimX), return_std=True)
 
     # Initialize data set or add new data points
     def add_data(self,X,y,fit=True):
@@ -102,7 +102,8 @@ class HVal(object):
     def get_nearest_zero(self, x, alpha=0.5, term=1e-5, max_iter=20):
 
         def f(x):
-            return hv.query(x,info='mean')
+            val = self.query(x,info='mean')
+            return np.repeat(val,self.dimX)
         optim = spo.root(f,x,method='hybr')
         if optim.success:
             root = optim.x
@@ -121,13 +122,13 @@ class HVal(object):
 
         perr = 1-sps.norm.cdf(np.abs(mean/stdev))
         # nz = None
-        if nz and exc:
+        if (not nz is None) and exc:
             # print("yes")
             zero_std_y = self.query(nz, info="stdev")
             # print(zero_std_y)
             zero_grad = self.get_gradient(nz)
             if np.linalg.norm(zero_grad) == 0:
-                print('zero grad:', nz)
+                # print('zero grad:', nz)
                 return 0
             else:
                 zero_std_x = zero_std_y/np.linalg.norm(zero_grad)
@@ -140,9 +141,10 @@ class HVal(object):
     def get_max_perr(self):
 
         def obj(x):
-            return -1*hv.get_perr(x)
-        bounds = np.array([[-1.5,1.5]])
-        optim = spo.differential_evolution(obj, bounds)
+            return -1*self.get_perr(x)
+        b = np.array([[0,10]])
+        bounds = np.tile(b,(self.dimX,1))
+        optim = spo.differential_evolution(obj, bounds,tol=0.1)
 
         return optim.x
 
@@ -156,48 +158,16 @@ class HVal(object):
         plt.plot(x, mean-stdev, 'b--', x, mean+stdev, 'b--')
         plt.hlines(0,np.min(x),np.max(x),'k','--')
 
+    def plot3D(self, x):
 
-if __name__ == '__main__':
+        # X = x.reshape(-1,self.dimX)
+        # print(x)
+        mean, stdev = self.query(x, info='both')
+        n = int(np.sqrt(x.shape[0]))
+        mimg = mean.reshape(n,n)
 
-    # Generate test data
-    N = 5
-    xrange = (-1.5,1.5)
-    noise = 0.01
+        plt.imshow(mimg,extent=[0,100,0,100],origin='lower')
+        plt.scatter(self.X[:-1,0],self.X[:-1,1],c='k')
+        plt.scatter(self.X[-1:,0],self.X[-1:,1],c='w') 
 
-    x_full = np.arange(xrange[0],xrange[1],0.01)
-
-    xx = np.random.uniform(xrange[0],xrange[1],N)
-    X = xx.reshape(-1,1)
-
-    f_true = lambda x: 1-x**2
-    y = f_true(X) + np.random.normal(0,noise,(N,1))
-
-    hv = HVal(alpha=noise)
-    hv.add_data(X,y)
-
-    # print(hv.X)
-    # print(hv.X[:-1,:])  
-    # print(hv.X[-1:,:])  
-    # print(hv.y)
-    # print(hv.y[:-1,:])
-    # print(hv.y[-1:,:])
-
-    for i in range(10):
-
-        print(hv.X)
-        print(hv.y)
-
-        xstar = hv.get_max_perr()
-        ystar = f_true(xstar)+np.random.normal(0,noise)
-        hv.add_data(xstar, ystar)
-    
-        plt.subplot(211)
-        hv.plot2D(x_full)
-        plt.scatter(hv.X[:-1,:],hv.y[:-1,:],color='b')
-        plt.scatter(hv.X[-1:,:],hv.y[-1:,:],color='r')
-
-        plt.subplot(212)
-        plt.plot(x_full, [hv.get_perr(x,exc=False) for x in x_full])
-        plt.plot(x_full, [hv.get_perr(x) for x in x_full])
-
-        plt.show()
+        return mimg  
